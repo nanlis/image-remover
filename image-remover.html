@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>格纹杀手 V2.0 - 专业版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: #1e1e1e; color: #e0e0e0; }
+        /* Checkerboard background for the canvas container itself to show transparency */
+        .checkerboard-bg {
+            background-image: 
+                linear-gradient(45deg, #2a2a2a 25%, transparent 25%), 
+                linear-gradient(-45deg, #2a2a2a 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #2a2a2a 75%), 
+                linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            background-color: #121212;
+        }
+        canvas { touch-action: none; image-rendering: pixelated; }
+        .tool-btn { @apply p-2 rounded border border-gray-600 hover:bg-gray-700 transition-colors flex flex-col items-center justify-center text-xs gap-1; }
+        .tool-btn.active { @apply bg-blue-600 border-blue-500 text-white; }
+        input[type="range"] { @apply w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <!-- Top Bar -->
+    <div class="bg-gray-800 border-b border-gray-700 p-4 flex justify-between items-center shrink-0">
+        <div>
+            <h1 class="text-xl font-bold text-white flex items-center gap-2">
+                <span class="bg-blue-600 text-xs px-2 py-1 rounded">V2.0</span> 
+                格纹杀手
+            </h1>
+            <p class="text-xs text-gray-400">双色锁定 + 连通域算法 + 手动修补</p>
+        </div>
+        <div class="flex gap-3">
+            <label class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded cursor-pointer text-sm font-medium transition-colors">
+                上传图片
+                <input type="file" id="uploadInput" accept="image/*" class="hidden">
+            </label>
+            <button id="downloadBtn" class="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                导出 PNG
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Workspace -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- Left Toolbar -->
+        <div class="w-64 bg-gray-800 border-r border-gray-700 flex flex-col p-4 gap-6 overflow-y-auto shrink-0">
+            
+            <!-- Step 1: Sampling -->
+            <div class="space-y-2">
+                <div class="text-xs font-bold text-blue-400 uppercase tracking-wider">第一步：采样背景</div>
+                <div class="text-xs text-gray-400 mb-2">点击下方色块，然后去图中吸取背景里的白格和灰格。</div>
+                <div class="flex gap-2">
+                    <div id="colorSample1" class="w-10 h-10 rounded border-2 border-white cursor-pointer bg-gray-500 relative" title="颜色1 (点击激活吸管)">
+                        <div class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full hidden" id="c1-active"></div>
+                    </div>
+                    <div id="colorSample2" class="w-10 h-10 rounded border-2 border-gray-500 cursor-pointer bg-gray-300 relative" title="颜色2 (点击激活吸管)">
+                        <div class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full hidden" id="c2-active"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Auto Remove -->
+            <div class="space-y-3 pt-4 border-t border-gray-700">
+                <div class="text-xs font-bold text-blue-400 uppercase tracking-wider">第二步：智能移除</div>
+                
+                <div>
+                    <label class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>容差 (Tolerance)</span>
+                        <span id="tolVal">40</span>
+                    </label>
+                    <input type="range" id="toleranceRange" min="5" max="100" value="40">
+                </div>
+
+                <button id="runFloodFillBtn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded text-sm font-bold shadow-lg">
+                    执行双色抠图
+                </button>
+                <p class="text-[10px] text-gray-500">提示：从图片左上角(0,0)开始扫描连通区域。</p>
+            </div>
+
+            <!-- Step 3: Manual Fix -->
+            <div class="space-y-3 pt-4 border-t border-gray-700">
+                <div class="text-xs font-bold text-blue-400 uppercase tracking-wider">第三步：手动修补</div>
+                
+                <div class="grid grid-cols-3 gap-2">
+                    <button class="tool-btn active" id="tool-pan" onclick="setTool('pan')">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"></path></svg>
+                        移动
+                    </button>
+                    <button class="tool-btn" id="tool-erase" onclick="setTool('erase')">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        擦除
+                    </button>
+                    <button class="tool-btn" id="tool-restore" onclick="setTool('restore')">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                        还原
+                    </button>
+                </div>
+
+                <div>
+                    <label class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>笔刷大小</span>
+                        <span id="brushSizeVal">20</span>
+                    </label>
+                    <input type="range" id="brushSize" min="1" max="100" value="20">
+                </div>
+            </div>
+
+             <!-- Undo/Reset -->
+             <div class="pt-4 mt-auto border-t border-gray-700 grid grid-cols-2 gap-2">
+                <button id="undoBtn" class="bg-gray-700 hover:bg-gray-600 text-white py-1 rounded text-xs">撤销</button>
+                <button id="resetBtn" class="bg-red-900/50 hover:bg-red-900 text-red-200 py-1 rounded text-xs">重置</button>
+            </div>
+        </div>
+
+        <!-- Canvas Area -->
+        <div class="flex-1 relative bg-[#121212] flex items-center justify-center overflow-hidden" id="canvasWrapper">
+             <!-- Background Check Toggles -->
+             <div class="absolute top-4 left-4 flex gap-2 z-10 bg-black/50 p-1 rounded backdrop-blur">
+                <button onclick="setBg('checker')" class="w-6 h-6 rounded border border-white/20 bg-[url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2N89uzZfwY8QFJSEp80A+OoAcMhKQwer2ZQwlHwYDQMIQYgq0fB4DAIAQA79Bj5/FO2WwAAAABJRU5ErkJggg==')]"></button>
+                <button onclick="setBg('#000')" class="w-6 h-6 rounded border border-white/20 bg-black"></button>
+                <button onclick="setBg('#fff')" class="w-6 h-6 rounded border border-white/20 bg-white"></button>
+                <button onclick="setBg('#0f0')" class="w-6 h-6 rounded border border-white/20 bg-green-500"></button>
+                <button onclick="setBg('#f00')" class="w-6 h-6 rounded border border-white/20 bg-red-500"></button>
+            </div>
+
+            <div id="canvasContainer" class="relative shadow-2xl origin-center">
+                <canvas id="mainCanvas"></canvas>
+                <!-- Cursor Indicator -->
+                <div id="cursorBrush" class="w-5 h-5 rounded-full border border-white shadow bg-transparent absolute pointer-events-none hidden transform -translate-x-1/2 -translate-y-1/2 z-20 mix-blend-difference"></div>
+            </div>
+             
+            <div id="placeholder" class="absolute text-gray-500 pointer-events-none">
+                请先在左上角上传图片
+            </div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const container = document.getElementById('canvasContainer');
+    const wrapper = document.getElementById('canvasWrapper');
+    const cursorBrush = document.getElementById('cursorBrush');
+
+    // State
+    let originalImage = null; // Image Object
+    let originalImageData = null; // The pure loaded data (read-only)
+    let currentImageData = null; // The current edited data
+    let history = [];
+    
+    let scale = 1;
+    let panX = 0, panY = 0;
+    let isDragging = false;
+    let lastMouseX = 0, lastMouseY = 0;
+    let isDrawing = false;
+    
+    // Tools: 'pan', 'erase', 'restore', 'picker1', 'picker2'
+    let currentTool = 'pan'; 
+    let brushSize = 20;
+
+    // Colors
+    let color1 = {r: 255, g: 255, b: 255}; // Default White
+    let color2 = {r: 204, g: 204, b: 204}; // Default Gray
+
+    // DOM Elements
+    const uploadInput = document.getElementById('uploadInput');
+    const sample1Btn = document.getElementById('colorSample1');
+    const sample2Btn = document.getElementById('colorSample2');
+    const c1Indicator = document.getElementById('c1-active');
+    const c2Indicator = document.getElementById('c2-active');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    // --- Initialization ---
+    uploadInput.addEventListener('change', handleUpload);
+    document.getElementById('brushSize').addEventListener('input', (e) => {
+        brushSize = parseInt(e.target.value);
+        document.getElementById('brushSizeVal').textContent = brushSize;
+        updateCursorSize();
+    });
+    document.getElementById('toleranceRange').addEventListener('input', (e) => {
+        document.getElementById('tolVal').textContent = e.target.value;
+    });
+    document.getElementById('undoBtn').addEventListener('click', undo);
+    document.getElementById('resetBtn').addEventListener('click', reset);
+    document.getElementById('downloadBtn').addEventListener('click', download);
+    document.getElementById('runFloodFillBtn').addEventListener('click', runDualFloodFill);
+
+    sample1Btn.addEventListener('click', () => setTool('picker1'));
+    sample2Btn.addEventListener('click', () => setTool('picker2'));
+
+    // --- Canvas Interaction ---
+    wrapper.addEventListener('wheel', handleZoom);
+    wrapper.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    function updateCursorSize() {
+        cursorBrush.style.width = brushSize * scale + 'px';
+        cursorBrush.style.height = brushSize * scale + 'px';
+    }
+
+    function setTool(tool) {
+        currentTool = tool;
+        document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+        
+        c1Indicator.classList.add('hidden');
+        c2Indicator.classList.add('hidden');
+        sample1Btn.classList.remove('ring-2', 'ring-blue-500');
+        sample2Btn.classList.remove('ring-2', 'ring-blue-500');
+        canvas.style.cursor = 'default';
+
+        if (tool === 'picker1') {
+            c1Indicator.classList.remove('hidden');
+            sample1Btn.classList.add('ring-2', 'ring-blue-500');
+            canvas.style.cursor = 'crosshair';
+        } else if (tool === 'picker2') {
+            c2Indicator.classList.remove('hidden');
+            sample2Btn.classList.add('ring-2', 'ring-blue-500');
+            canvas.style.cursor = 'crosshair';
+        } else if (tool === 'pan') {
+            document.getElementById('tool-pan').classList.add('active');
+            canvas.style.cursor = 'grab';
+        } else if (tool === 'erase') {
+            document.getElementById('tool-erase').classList.add('active');
+            cursorBrush.classList.remove('hidden');
+            canvas.style.cursor = 'none';
+        } else if (tool === 'restore') {
+            document.getElementById('tool-restore').classList.add('active');
+            cursorBrush.classList.remove('hidden');
+            canvas.style.cursor = 'none';
+        }
+
+        if (tool !== 'erase' && tool !== 'restore') {
+            cursorBrush.classList.add('hidden');
+        }
+    }
+
+    function handleUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            const img = new Image();
+            img.onload = () => {
+                initCanvas(img);
+            };
+            img.src = evt.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function initCanvas(img) {
+        originalImage = img;
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        
+        originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        currentImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        saveHistory();
+
+        // Fit to screen
+        const wrapperW = wrapper.clientWidth;
+        const wrapperH = wrapper.clientHeight;
+        const ratio = Math.min((wrapperW - 40) / img.width, (wrapperH - 40) / img.height);
+        scale = ratio;
+        panX = (wrapperW - img.width * scale) / 2;
+        panY = (wrapperH - img.height * scale) / 2;
+        
+        updateTransform();
+        document.getElementById('placeholder').classList.add('hidden');
+        downloadBtn.disabled = false;
+        
+        // Auto-sample corner colors as guess
+        const data = originalImageData.data;
+        color1 = {r: data[0], g: data[1], b: data[2]};
+        // Guess color 2 is roughly 20px in?
+        const offset = (20 * canvas.width + 20) * 4;
+        color2 = {r: data[offset], g: data[offset+1], b: data[offset+2]};
+        
+        updateColorPreviews();
+    }
+
+    function updateColorPreviews() {
+        sample1Btn.style.backgroundColor = `rgb(${color1.r},${color1.g},${color1.b})`;
+        sample2Btn.style.backgroundColor = `rgb(${color2.r},${color2.g},${color2.b})`;
+    }
+
+    function updateTransform() {
+        container.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        updateCursorSize();
+    }
+
+    function handleZoom(e) {
+        e.preventDefault();
+        const zoomIntensity = 0.1;
+        const wheel = e.deltaY < 0 ? 1 : -1;
+        const zoom = Math.exp(wheel * zoomIntensity);
+        
+        // Zoom towards mouse
+        const rect = wrapper.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const newScale = scale * zoom;
+        
+        panX = mouseX - (mouseX - panX) * zoom;
+        panY = mouseY - (mouseY - panY) * zoom;
+        scale = newScale;
+        
+        updateTransform();
+    }
+
+    function screenToCanvas(clientx, clienty) {
+        const rect = wrapper.getBoundingClientRect();
+        const wrapperX = clientx - rect.left;
+        const wrapperY = clienty - rect.top;
+        
+        const canvasX = (wrapperX - panX) / scale;
+        const canvasY = (wrapperY - panY) / scale;
+        return {x: Math.floor(canvasX), y: Math.floor(canvasY)};
+    }
+
+    function handleMouseDown(e) {
+        if (!originalImage) return;
+        const pos = screenToCanvas(e.clientX, e.clientY);
+        
+        if (currentTool === 'pan') {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            canvas.style.cursor = 'grabbing';
+        } else if (currentTool.startsWith('picker')) {
+            pickColor(pos.x, pos.y);
+        } else if (currentTool === 'erase' || currentTool === 'restore') {
+            isDrawing = true;
+            applyBrush(pos.x, pos.y);
+        }
+    }
+
+    function handleMouseMove(e) {
+        if (!originalImage) return;
+        
+        if (currentTool === 'erase' || currentTool === 'restore') {
+            // Update custom cursor position (relative to screen)
+            // But we put it inside container to scale properly? No, put in wrapper
+            const rect = wrapper.getBoundingClientRect();
+            cursorBrush.style.left = (e.clientX - rect.left) + 'px';
+            cursorBrush.style.top = (e.clientY - rect.top) + 'px';
+            
+            if (isDrawing) {
+                const pos = screenToCanvas(e.clientX, e.clientY);
+                applyBrush(pos.x, pos.y);
+            }
+        }
+
+        if (isDragging && currentTool === 'pan') {
+            const dx = e.clientX - lastMouseX;
+            const dy = e.clientY - lastMouseY;
+            panX += dx;
+            panY += dy;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            updateTransform();
+        }
+    }
+
+    function handleMouseUp() {
+        if (isDragging) {
+            isDragging = false;
+            if(currentTool === 'pan') canvas.style.cursor = 'grab';
+        }
+        if (isDrawing) {
+            isDrawing = false;
+            ctx.putImageData(currentImageData, 0, 0);
+            saveHistory();
+        }
+    }
+
+    function pickColor(x, y) {
+        if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
+        const idx = (y * canvas.width + x) * 4;
+        const r = currentImageData.data[idx];
+        const g = currentImageData.data[idx+1];
+        const b = currentImageData.data[idx+2];
+        
+        if (currentTool === 'picker1') {
+            color1 = {r, g, b};
+            setTool('pan'); // Auto switch back
+        } else {
+            color2 = {r, g, b};
+            setTool('pan');
+        }
+        updateColorPreviews();
+    }
+
+    function applyBrush(cx, cy) {
+        // Simple circle brush
+        const r = Math.floor(brushSize / 2);
+        const r2 = r * r;
+        const width = canvas.width;
+        const height = canvas.height;
+        const data = currentImageData.data;
+        const sourceData = originalImageData.data;
+        
+        let changed = false;
+
+        for (let y = cy - r; y <= cy + r; y++) {
+            for (let x = cx - r; x <= cx + r; x++) {
+                if (x < 0 || y < 0 || x >= width || y >= height) continue;
+                if ((x - cx)**2 + (y - cy)**2 <= r2) {
+                    const idx = (y * width + x) * 4;
+                    if (currentTool === 'erase') {
+                        if (data[idx+3] !== 0) {
+                            data[idx+3] = 0; // Alpha 0
+                            changed = true;
+                        }
+                    } else if (currentTool === 'restore') {
+                        if (data[idx+3] !== 255) {
+                            // Restore from original
+                            data[idx] = sourceData[idx];
+                            data[idx+1] = sourceData[idx+1];
+                            data[idx+2] = sourceData[idx+2];
+                            data[idx+3] = 255;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if (changed) {
+            ctx.putImageData(currentImageData, 0, 0);
+        }
+    }
+
+    // --- The Core Algorithm: Dual-Color Connectivity Flood Fill ---
+    function runDualFloodFill() {
+        const tolerance = parseInt(document.getElementById('toleranceRange').value);
+        const width = canvas.width;
+        const height = canvas.height;
+        const data = currentImageData.data; // Modify current state
+        
+        // Use a visited array to prevent loops
+        const visited = new Uint8Array(width * height);
+        
+        // Queue for BFS. Start at (0,0) and other edges
+        const queue = [];
+        
+        // Add borders to queue to ensure we catch background from all sides
+        for(let x=0; x<width; x++) { queue.push(x, 0); queue.push(x, height-1); }
+        for(let y=1; y<height-1; y++) { queue.push(0, y); queue.push(width-1, y); }
+
+        let pixelCount = 0;
+
+        while (queue.length > 0) {
+            const y = queue.pop();
+            const x = queue.pop();
+            const idx = y * width + x;
+
+            if (visited[idx]) continue;
+            
+            // Check if this pixel matches either Color1 or Color2
+            const r = data[idx*4];
+            const g = data[idx*4+1];
+            const b = data[idx*4+2];
+            const a = data[idx*4+3];
+
+            if (a === 0) {
+                // Already transparent, treat as valid path
+                visited[idx] = 1;
+                // Add neighbors
+                if (x > 0) { queue.push(x-1, y); }
+                if (x < width-1) { queue.push(x+1, y); }
+                if (y > 0) { queue.push(x, y-1); }
+                if (y < height-1) { queue.push(x, y+1); }
+                continue;
+            }
+
+            // Distances
+            const dist1 = Math.sqrt((r-color1.r)**2 + (g-color1.g)**2 + (b-color1.b)**2);
+            const dist2 = Math.sqrt((r-color2.r)**2 + (g-color2.g)**2 + (b-color2.b)**2);
+
+            if (dist1 < tolerance || dist2 < tolerance) {
+                // It's background!
+                data[idx*4+3] = 0; // Erase
+                visited[idx] = 1;
+
+                // Push neighbors
+                if (x > 0 && !visited[idx-1]) { queue.push(x-1, y); }
+                if (x < width-1 && !visited[idx+1]) { queue.push(x+1, y); }
+                if (y > 0 && !visited[idx-width]) { queue.push(x, y-1); }
+                if (y < height-1 && !visited[idx+width]) { queue.push(x, y+1); }
+            }
+        }
+
+        ctx.putImageData(currentImageData, 0, 0);
+        saveHistory();
+    }
+
+    function saveHistory() {
+        // Clone the imageData
+        const newImageData = new ImageData(
+            new Uint8ClampedArray(currentImageData.data),
+            currentImageData.width,
+            currentImageData.height
+        );
+        history.push(newImageData);
+        if (history.length > 10) history.shift();
+    }
+
+    function undo() {
+        if (history.length > 1) {
+            history.pop();
+            currentImageData = history[history.length - 1];
+            ctx.putImageData(currentImageData, 0, 0);
+        }
+    }
+
+    function reset() {
+        if (history.length > 0) {
+            currentImageData = new ImageData(
+                new Uint8ClampedArray(originalImageData.data),
+                originalImageData.width,
+                originalImageData.height
+            );
+            history = [currentImageData]; // Clear history except initial
+            ctx.putImageData(currentImageData, 0, 0);
+            scale = Math.min((wrapper.clientWidth - 40) / canvas.width, (wrapper.clientHeight - 40) / canvas.height);
+            panX = (wrapper.clientWidth - canvas.width * scale) / 2;
+            panY = (wrapper.clientHeight - canvas.height * scale) / 2;
+            updateTransform();
+        }
+    }
+
+    function download() {
+        const link = document.createElement('a');
+        link.download = 'cleaned_image.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    }
+
+    window.setBg = function(color) {
+        if (color === 'checker') {
+            container.style.backgroundColor = '';
+            container.classList.add('checkerboard-bg');
+        } else {
+            container.classList.remove('checkerboard-bg');
+            container.style.backgroundColor = color;
+        }
+    }
+</script>
+</body>
+</html>
+
